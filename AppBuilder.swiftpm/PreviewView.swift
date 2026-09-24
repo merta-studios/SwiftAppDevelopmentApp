@@ -1,183 +1,451 @@
 import SwiftUI
 
+/// Full Interactive Runtime Simulator for App Builder.
+/// Executes state variables, 60fps tweens, sound synthesis, haptics, particle effects, and screen navigation.
 struct PreviewRuntimeView: View {
     let project: BuilderProject
     @Binding var isPresented: Bool
-    @State private var notice: String?
-    @State private var inputText = ""
-    @State private var toggleValue = false
-    @State private var sliderValue = 0.5
+
+    @StateObject private var engine = ScriptEngine()
+    @State private var currentScreenName: String = ""
+    @State private var activeSheetScreenName: String? = nil
+    @State private var showingDebugBar = true
+
+    private var currentScreen: AppScreen? {
+        if let match = project.document.screens.first(where: { $0.name == currentScreenName }) {
+            return match
+        }
+        return project.document.screens.first
+    }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            NavigationStack {
-                ScrollView {
-                    runtimeView(project.document.root)
-                        .frame(maxWidth: 760, alignment: .topLeading)
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 28)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+        TimelineView(.animation) { timeline in
+            ZStack(alignment: .topTrailing) {
+                // Background & Current Screen Content
+                ZStack {
+                    if let screen = currentScreen {
+                        ScreenRuntimeCanvas(screen: screen, engine: engine)
+                    }
                 }
-                .background(Color(hex: project.document.accentHex).opacity(0.055))
-                .navigationTitle(project.document.appName)
-                .navigationBarTitleDisplayMode(.inline)
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(hex: currentScreen?.backgroundColorHex ?? "#0F172A"))
+                .ignoresSafeArea()
 
-            // Deliberately tiny: testing should feel like using the app, not debugging it.
-            Button {
-                isPresented = false
-            } label: {
-                Image(systemName: "stop.fill")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(.black.opacity(0.68), in: Circle())
-                    .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 1))
+                // Confetti Explosion Overlay
+                if engine.triggerConfetti > 0 {
+                    ConfettiParticleOverlay(burstID: engine.triggerConfetti)
+                        .allowsHitTesting(false)
+                }
+
+                // Top Floating Close & Debug Bar
+                VStack(spacing: 8) {
+                    HStack(spacing: 12) {
+                        // Debug state pill
+                        Button {
+                            withAnimation { showingDebugBar.toggle() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "ladybug.fill")
+                                    .font(.caption2)
+                                Text("Variables (\(engine.variables.count))")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .foregroundStyle(.white)
+                            .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        // Stop Preview Button
+                        Button {
+                            isPresented = false
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(.black.opacity(0.75), in: Circle())
+                                .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
+                    // Floating Variable Watcher HUD
+                    if showingDebugBar && !engine.variables.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(Array(engine.variables.values)) { v in
+                                    HStack(spacing: 4) {
+                                        Text(v.name + ":")
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(.white.opacity(0.7))
+                                        Text(v.displayValue)
+                                            .font(.caption2.monospacedDigit().weight(.heavy))
+                                            .foregroundStyle(Color(hex: project.document.accentHex))
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
+                                }
+
+                                Button {
+                                    engine.resetToDefaults()
+                                } label: {
+                                    Label("Reset", systemImage: "arrow.counterclockwise")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(.red.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
+                    Spacer()
+                }
+
+                // Alert notification
+                if let notif = engine.activeNotification {
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 12) {
+                            Image(systemName: "bell.fill")
+                                .font(.title3)
+                                .foregroundStyle(.yellow)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(notif.title)
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                Text(notif.message)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
+                            Spacer()
+                            Button("Dismiss") {
+                                engine.activeNotification = nil
+                            }
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.white.opacity(0.2), in: Capsule())
+                        }
+                        .padding(16)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.2), lineWidth: 1))
+                        .padding(20)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
-            .buttonStyle(.plain)
-            .padding(.top, 8)
-            .padding(.trailing, 10)
-            .accessibilityLabel("Stop preview")
+            .onChange(of: timeline.date) { _ in
+                engine.updateTweens()
+            }
+            .onChange(of: engine.requestedScreenNavigation?.screenName) { newScreen in
+                if let target = newScreen {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        currentScreenName = target
+                    }
+                    engine.requestedScreenNavigation = nil
+                }
+            }
         }
-        .statusBarHidden(true)
-        .alert("App message", isPresented: Binding(
-            get: { notice != nil },
-            set: { if !$0 { notice = nil } }
-        )) {
-            Button("OK") { notice = nil }
-        } message: {
-            Text(notice ?? "")
+        .onAppear {
+            engine.initialize(variables: project.document.globalVariables)
+            currentScreenName = project.document.screens.first?.name ?? "Home"
+        }
+    }
+}
+
+// MARK: - Screen Runtime Canvas
+
+struct ScreenRuntimeCanvas: View {
+    let screen: AppScreen
+    @ObservedObject var engine: ScriptEngine
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                ForEach(screen.elements) { el in
+                    RuntimeElementView(element: el, engine: engine)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+    }
+}
+
+// MARK: - Runtime Element View (Interactive)
+
+struct RuntimeElementView: View {
+    let element: AppElement
+    @ObservedObject var engine: ScriptEngine
+
+    @State private var inputText: String = ""
+
+    var body: some View {
+        let transforms = engine.activeTransforms[element.name] ?? [:]
+        let dynScale = transforms[.scale] ?? element.scale
+        let dynRot = transforms[.rotation] ?? element.rotation
+        let dynOpacity = transforms[.opacity] ?? element.opacity
+        let dynX = transforms[.positionX] ?? 0
+        let dynY = transforms[.positionY] ?? 0
+        let dynW = transforms[.width] ?? element.width
+        let dynH = transforms[.height] ?? element.height
+
+        Group {
+            switch element.kind {
+            case .button:
+                Button {
+                    engine.executeAll(element.onTapActions)
+                } label: {
+                    HStack(spacing: 8) {
+                        if !element.iconName.isEmpty {
+                            Image(systemName: element.iconName)
+                        }
+                        Text(displayText(for: element))
+                            .font(.system(size: element.fontSize, weight: element.fontWeight.swiftWeight, design: element.fontDesign.swiftDesign))
+                    }
+                    .foregroundStyle(Color(hex: element.textColorHex))
+                    .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+                    .background(Color(hex: element.colorHex), in: RoundedRectangle(cornerRadius: element.cornerRadius))
+                    .shadow(color: Color(hex: element.shadowColorHex), radius: element.shadowRadius, x: 0, y: element.shadowY)
+                }
+                .buttonStyle(ScaleButtonStyle())
+
+            case .icon:
+                Image(systemName: element.iconName.isEmpty ? "sparkles" : element.iconName)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Color(hex: element.colorHex))
+                    .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+                    .onTapGesture {
+                        engine.executeAll(element.onTapActions)
+                    }
+
+            case .text:
+                Text(displayText(for: element))
+                    .font(.system(size: element.fontSize, weight: element.fontWeight.swiftWeight, design: element.fontDesign.swiftDesign))
+                    .foregroundStyle(Color(hex: element.textColorHex))
+                    .multilineTextAlignment(element.textAlignment.swiftAlignment)
+                    .frame(width: CGFloat(dynW), height: CGFloat(dynH), alignment: .leading)
+                    .onTapGesture {
+                        engine.executeAll(element.onTapActions)
+                    }
+
+            case .shape:
+                RoundedRectangle(cornerRadius: element.cornerRadius)
+                    .fill(Color(hex: element.colorHex))
+                    .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+                    .overlay(
+                        Text(displayText(for: element))
+                            .font(.system(size: element.fontSize, weight: element.fontWeight.swiftWeight))
+                            .foregroundStyle(Color(hex: element.textColorHex))
+                    )
+                    .onTapGesture {
+                        engine.executeAll(element.onTapActions)
+                    }
+
+            case .textField:
+                TextField(element.placeholder, text: Binding(
+                    get: {
+                        if !element.boundVariable.isEmpty {
+                            return engine.getText(element.boundVariable)
+                        }
+                        return inputText
+                    },
+                    set: { val in
+                        inputText = val
+                        if !element.boundVariable.isEmpty {
+                            engine.setText(element.boundVariable, val)
+                        }
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: element.cornerRadius))
+                .overlay(RoundedRectangle(cornerRadius: element.cornerRadius).stroke(Color(hex: element.colorHex), lineWidth: 1))
+
+            case .toggle:
+                Toggle(element.text, isOn: Binding(
+                    get: {
+                        if !element.boundVariable.isEmpty {
+                            return engine.getBool(element.boundVariable)
+                        }
+                        return false
+                    },
+                    set: { val in
+                        if !element.boundVariable.isEmpty {
+                            engine.setBool(element.boundVariable, val)
+                        }
+                        engine.executeAll(element.onTapActions)
+                    }
+                ))
+                .tint(Color(hex: element.colorHex))
+                .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+
+            case .slider:
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(element.text).font(.caption.weight(.bold))
+                        Spacer()
+                        if !element.boundVariable.isEmpty {
+                            Text(String(format: "%.1f", engine.getNumber(element.boundVariable)))
+                                .font(.caption.monospacedDigit())
+                        }
+                    }
+                    Slider(
+                        value: Binding(
+                            get: {
+                                if !element.boundVariable.isEmpty {
+                                    return engine.getNumber(element.boundVariable)
+                                }
+                                return 50
+                            },
+                            set: { val in
+                                if !element.boundVariable.isEmpty {
+                                    engine.setNumber(element.boundVariable, val)
+                                }
+                            }
+                        ),
+                        in: element.minValue...element.maxValue
+                    )
+                    .tint(Color(hex: element.colorHex))
+                }
+                .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+
+            case .progressBar:
+                let currentVal = !element.boundVariable.isEmpty ? engine.getNumber(element.boundVariable) : 50
+                let progress = max(0.0, min(1.0, (currentVal - element.minValue) / max(1.0, (element.maxValue - element.minValue))))
+
+                GeometryReader { barGeo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.2))
+                        Capsule()
+                            .fill(Color(hex: element.colorHex))
+                            .frame(width: barGeo.size.width * CGFloat(progress))
+                    }
+                }
+                .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+
+            case .badge:
+                Text(displayText(for: element))
+                    .font(.system(size: element.fontSize, weight: .bold))
+                    .foregroundStyle(Color(hex: element.textColorHex))
+                    .padding(.horizontal, 12)
+                    .frame(height: CGFloat(dynH))
+                    .background(Color(hex: element.colorHex), in: Capsule())
+
+            case .soundPad:
+                Button {
+                    engine.executeAll(element.onTapActions)
+                    SoundManager.shared.play(.coin)
+                } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: "waveform")
+                            .font(.title2)
+                        Text(element.text)
+                            .font(.caption.weight(.bold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: CGFloat(dynW), height: CGFloat(dynH))
+                    .background(Color(hex: element.colorHex), in: RoundedRectangle(cornerRadius: element.cornerRadius))
+                }
+                .buttonStyle(ScaleButtonStyle())
+
+            default:
+                EmptyView()
+            }
+        }
+        .scaleEffect(dynScale)
+        .rotationEffect(.degrees(dynRot))
+        .opacity(dynOpacity)
+        .offset(x: CGFloat(element.x + dynX), y: CGFloat(element.y + dynY))
+    }
+
+    private func displayText(for el: AppElement) -> String {
+        if !el.boundVariable.isEmpty {
+            if let v = engine.variables[el.boundVariable] {
+                return "\(el.text.isEmpty ? "" : el.text + " ")\(v.displayValue)"
+            }
+        }
+        return el.text
+    }
+}
+
+// MARK: - Scale Button Style
+
+struct ScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Confetti Particle Overlay
+
+struct ConfettiParticleOverlay: View {
+    let burstID: Int
+    @State private var particles: [Particle] = []
+
+    struct Particle: Identifiable {
+        let id = UUID()
+        var x: CGFloat
+        var y: CGFloat
+        var color: Color
+        var size: CGFloat
+        var velocityX: CGFloat
+        var velocityY: CGFloat
+        var rotation: Double
+    }
+
+    private let colors: [Color] = [.red, .green, .blue, .yellow, .purple, .orange, .pink, .cyan]
+
+    var body: some View {
+        TimelineView(.animation) { _ in
+            Canvas { context, size in
+                for p in particles {
+                    var path = Path()
+                    path.addRect(CGRect(x: p.x, y: p.y, width: p.size, height: p.size))
+                    context.fill(path, with: .color(p.color))
+                }
+            }
+        }
+        .onAppear {
+            generateParticles()
+        }
+        .onChange(of: burstID) { _ in
+            generateParticles()
         }
     }
 
-    private func runtimeView(_ block: BuilderBlock) -> AnyView {
-        switch block.kind {
-        case .verticalStack:
-            return AnyView(VStack(alignment: .leading, spacing: 16) {
-                ForEach(block.children) { child in runtimeView(child) }
-            })
-        case .horizontalStack:
-            return AnyView(HStack(spacing: 12) {
-                ForEach(block.children) { child in runtimeView(child) }
-            })
-        case .zStack:
-            return AnyView(ZStack {
-                ForEach(block.children) { child in runtimeView(child) }
-            })
-        case .spacer:
-            return AnyView(Spacer(minLength: 18))
-        case .padding:
-            return AnyView(VStack(alignment: .leading, spacing: 12) {
-                ForEach(block.children) { child in runtimeView(child) }
-            }.padding(18))
-        case .text:
-            return AnyView(Text(block.title)
-                .font(.title3)
-                .foregroundStyle(Color(hex: block.colorHex)))
-        case .image:
-            return AnyView(Image(systemName: block.title.isEmpty ? "star.fill" : block.title)
-                .font(.system(size: 52, weight: .semibold))
-                .foregroundStyle(Color(hex: block.colorHex)))
-        case .colorBox:
-            return AnyView(RoundedRectangle(cornerRadius: 22)
-                .fill(Color(hex: block.colorHex))
-                .frame(height: 86)
-                .overlay(Text(block.title).foregroundStyle(.white).font(.headline)))
-        case .divider:
-            return AnyView(Divider())
-        case .badge:
-            return AnyView(Text(block.title)
-                .font(.caption.weight(.bold))
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(Color(hex: block.colorHex).opacity(0.18), in: Capsule())
-                .foregroundStyle(Color(hex: block.colorHex)))
-        case .button:
-            return AnyView(Button {
-                notice = block.secondaryValue.isEmpty ? "You tapped \(block.title)." : block.secondaryValue
-            } label: {
-                Text(block.title)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color(hex: block.colorHex)))
-        case .navigationLink:
-            return AnyView(NavigationLink {
-                VStack(spacing: 14) {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.largeTitle)
-                        .foregroundStyle(Color(hex: block.colorHex))
-                    Text("Next screen")
-                        .font(.title2.weight(.bold))
-                    Text("This destination was made from one visual block.")
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
-                .navigationTitle(block.title)
-            } label: {
-                Label(block.title, systemImage: "arrow.right.circle")
-            })
-        case .toggle:
-            return AnyView(Toggle(block.title, isOn: $toggleValue)
-                .tint(Color(hex: block.colorHex)))
-        case .slider:
-            return AnyView(VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(block.title)
-                    Spacer()
-                    Text(sliderValue, format: .number.precision(.fractionLength(2)))
-                        .foregroundStyle(.secondary)
-                }
-                Slider(value: $sliderValue, in: 0...1)
-                    .tint(Color(hex: block.colorHex))
-            })
-        case .textField:
-            return AnyView(TextField(block.title, text: $inputText)
-                .textFieldStyle(.roundedBorder))
-        case .list:
-            return AnyView(VStack(alignment: .leading, spacing: 0) {
-                ForEach(1...3, id: \.self) { number in
-                    Label("\(block.title) \(number)", systemImage: "circle.fill")
-                        .font(.body)
-                        .foregroundStyle(Color(hex: block.colorHex))
-                        .padding(.vertical, 10)
-                    if number < 3 { Divider() }
-                }
-            })
-        case .state:
-            return AnyView(Label("\(block.title): \(block.value.isEmpty ? "0" : block.value)", systemImage: "number.circle"))
-        case .conditional:
-            let shouldShow = block.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "false"
-            return AnyView(Group {
-                if shouldShow {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(block.children) { child in runtimeView(child) }
-                    }
-                }
-            })
-        case .repeatBlock:
-            let count = max(0, Int(block.title) ?? 3)
-            return AnyView(VStack(alignment: .leading, spacing: 12) {
-                ForEach(0..<count, id: \.self) { _ in
-                    ForEach(block.children) { child in runtimeView(child) }
-                }
-            })
-        case .event:
-            return AnyView(VStack(alignment: .leading, spacing: 9) {
-                Text(block.title)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                ForEach(block.children) { child in runtimeView(child) }
-            })
-        case .rawSwift:
-            return AnyView(HStack(spacing: 9) {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                Text("Power code preview")
-                    .font(.subheadline.monospaced())
-                Spacer()
-            }
-            .padding(12)
-            .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12)))
+    private func generateParticles() {
+        var newP: [Particle] = []
+        for _ in 0..<70 {
+            newP.append(
+                Particle(
+                    x: CGFloat.random(in: 50...350),
+                    y: CGFloat.random(in: 100...400),
+                    color: colors.randomElement() ?? .yellow,
+                    size: CGFloat.random(in: 6...12),
+                    velocityX: CGFloat.random(in: -100...100),
+                    velocityY: CGFloat.random(in: -200...200),
+                    rotation: Double.random(in: 0...360)
+                )
+            )
         }
+        particles = newP
     }
 }
