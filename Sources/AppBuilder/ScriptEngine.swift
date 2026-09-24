@@ -30,7 +30,7 @@ struct ActiveTween: Identifiable {
         }
 
         let loopProgress = (elapsed.truncatingRemainder(dividingBy: cycleDuration)) / duration
-        let (rawT, reversed) = loopProgress > 1.0 ? (2.0 - loopProgress, true) : (loopProgress, false)
+        let rawT = loopProgress > 1.0 ? 2.0 - loopProgress : loopProgress
         let t = max(0.0, min(1.0, rawT))
         let easedT = applyEasing(t, easing: easing)
 
@@ -486,13 +486,12 @@ final class ScriptEngine: ObservableObject {
     }
 
     func evaluateStringExpression(_ raw: String) -> String {
-        var str = raw
         // Lua string concatenation .. or +
-        let parts = str.components(separatedBy: "..")
+        let parts = raw.components(separatedBy: "..")
         if parts.count > 1 {
             return parts.map { evaluateStringPart($0) }.joined()
         }
-        return evaluateStringPart(str)
+        return evaluateStringPart(raw)
     }
 
     private func evaluateStringPart(_ part: String) -> String {
@@ -528,9 +527,7 @@ final class ScriptEngine: ObservableObject {
         cond = cond.replacingOccurrences(of: "or", with: "OR")
         cond = cond.replacingOccurrences(of: "not", with: "NOT")
 
-        if let predicate = try? NSPredicate(format: cond) {
-            return predicate.evaluate(with: nil)
-        }
-        return false
+        let predicate = NSPredicate(format: cond)
+        return predicate.evaluate(with: nil)
     }
 }

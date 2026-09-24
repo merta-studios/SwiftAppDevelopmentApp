@@ -277,7 +277,7 @@ struct CodeWorkspaceView: View {
                         .font(.caption.weight(.bold))
                     TextEditor(text: Binding(
                         get: { store.activeProject?.customSwift ?? "" },
-                        set: { val in store.updateActiveProject { $0.customSwift = val } }
+                        set: { val in store.mutateActive { $0.customSwift = val } }
                     ))
                     .font(.system(.body, design: .monospaced))
                     .padding(8)
@@ -291,7 +291,7 @@ struct CodeWorkspaceView: View {
                         .font(.caption.weight(.bold))
                     TextEditor(text: Binding(
                         get: { store.activeProject?.document.notes ?? "" },
-                        set: { val in store.updateActiveProject { $0.document.notes = val } }
+                        set: { val in store.mutateActive { $0.document.notes = val } }
                     ))
                     .font(.body)
                     .padding(8)
