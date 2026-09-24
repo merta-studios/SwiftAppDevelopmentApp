@@ -518,7 +518,7 @@ struct CanvasElementRenderView: View {
                 Spacer()
                 HStack(spacing: 6) {
                     Image(systemName: "minus").frame(width: 24, height: 24).background(.quaternary, in: Circle())
-                    Text("0").font(.monospacedDigit())
+                    Text("0").monospacedDigit()
                     Image(systemName: "plus").frame(width: 24, height: 24).background(.quaternary, in: Circle())
                 }
             }
